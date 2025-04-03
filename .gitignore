@@ -1,0 +1,46 @@
+ # Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 打包相关
+*.spec
+
+# 个人配置文件
+pdf_cropper_config.ini
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDE相关
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统相关
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志文件
+*.log
