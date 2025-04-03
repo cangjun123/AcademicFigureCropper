@@ -7,6 +7,7 @@ import fitz  # PyMuPDF
 import threading
 import configparser
 import numpy as np  # 添加numpy库
+from PIL import Image  # 添加PIL库用于处理图片
 
 # 判断是否在打包环境中运行
 def resource_path(relative_path):
@@ -21,7 +22,7 @@ def resource_path(relative_path):
 class PDFCropperApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("PDF白边剪裁工具")
+        self.root.title("Academic Figure Cropper")
         self.root.geometry("500x700")  # 增加默认窗口大小
         self.root.minsize(500, 700)  # 增加最小窗口大小
         
@@ -46,6 +47,9 @@ class PDFCropperApp:
         self.secondary_text = "#757575" # 次要文本颜色
         self.button_text_color = "#ffffff"  # 按钮文字颜色为白色
         self.border_color = "#e0e0e0"   # 边框颜色
+        
+        # 支持的图片格式
+        self.supported_img_formats = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif')
         
         # 配置样式
         self.style = ttk.Style()
@@ -187,11 +191,11 @@ class PDFCropperApp:
         title_frame = ttk.Frame(self.main_frame)
         title_frame.pack(fill=tk.X, pady=(0, 20))
         
-        title_label = ttk.Label(title_frame, text="PDF白边剪裁工具", style="Title.TLabel")
+        title_label = ttk.Label(title_frame, text="Academic Figure Cropper", style="Title.TLabel")
         title_label.pack(side=tk.TOP, anchor=tk.W)
         
         description = ttk.Label(title_frame, 
-                              text="拖放PDF文件到下方区域，自动剪裁白边并保存", 
+                              text="拖放PDF或图片文件到下方区域，自动剪裁白边并保存", 
                               style="Subtitle.TLabel")
         description.pack(side=tk.TOP, anchor=tk.W, pady=(5, 0))
         
@@ -209,10 +213,10 @@ class PDFCropperApp:
         self.drop_icon_label = ttk.Label(drop_center_frame, text="📄", font=("微软雅黑", 48), style="Card.TLabel")
         self.drop_icon_label.pack(pady=(10, 15))
         
-        self.drop_label = ttk.Label(drop_center_frame, text="拖放PDF文件到这里", font=("微软雅黑", 12, "bold"), style="Card.TLabel")
+        self.drop_label = ttk.Label(drop_center_frame, text="拖放PDF或图片文件到这里", font=("微软雅黑", 12, "bold"), style="Card.TLabel")
         self.drop_label.pack(pady=(0, 10))
         
-        self.drop_hint = ttk.Label(drop_center_frame, text="支持单个或多个PDF文件", style="Card.TLabel")
+        self.drop_hint = ttk.Label(drop_center_frame, text="支持PDF和常见图片格式(.jpg, .png等)", style="Card.TLabel")
         self.drop_hint.pack()
         
         # 为整个拖放区域绑定拖放事件
@@ -363,15 +367,16 @@ class PDFCropperApp:
         for item in data.split():
             # 处理可能的引号和花括号（Windows路径特性）
             item = item.strip('{}')
-            # 检查是否为PDF文件
-            if item.lower().endswith('.pdf'):
+            # 检查文件扩展名
+            _, ext = os.path.splitext(item.lower())
+            if ext == '.pdf' or ext in self.supported_img_formats:
                 files.append(item)
         return files
     
     def process_dropped_files(self, files):
-        """处理拖放的PDF文件"""
+        """处理拖放的文件"""
         if not files:
-            messagebox.showinfo("提示", "没有检测到PDF文件")
+            messagebox.showinfo("提示", "没有检测到支持的文件格式")
             return
         
         # 检查输出路径
@@ -397,22 +402,26 @@ class PDFCropperApp:
         total_success = 0
         total_failed = 0
         
-        for i, pdf_path in enumerate(self.processing_files):
+        for i, file_path in enumerate(self.processing_files):
             try:
-                filename = os.path.basename(pdf_path)
+                filename = os.path.basename(file_path)
                 self.status_var.set(f"正在处理: {filename}")
                 
                 # 确定输出路径
                 if self.overwrite_var.get():
-                    output_path = pdf_path
+                    output_path = file_path
                 else:
                     output_dir = self.config.get('Settings', 'output_dir')
-                    output_name = os.path.basename(pdf_path)
+                    output_name = os.path.basename(file_path)
                     base_name, ext = os.path.splitext(output_name)
                     output_path = os.path.join(output_dir, f"{base_name}_cropped{ext}")
                 
-                # 剪裁处理
-                self.crop_pdf(pdf_path, output_path)
+                # 根据文件类型选择处理方法
+                _, ext = os.path.splitext(file_path.lower())
+                if ext == '.pdf':
+                    self.crop_pdf(file_path, output_path)
+                elif ext in self.supported_img_formats:
+                    self.crop_image(file_path, output_path)
                 
                 # 更新进度
                 self.progress_var.set(i+1)
@@ -421,7 +430,7 @@ class PDFCropperApp:
                 
             except Exception as e:
                 total_failed += 1
-                messagebox.showerror("错误", f"处理文件 {os.path.basename(pdf_path)} 时出错:\n{str(e)}")
+                messagebox.showerror("错误", f"处理文件 {os.path.basename(file_path)} 时出错:\n{str(e)}")
         
         # 处理完成后更新UI
         self.drop_icon_label.config(text="✅" if total_failed == 0 else "⚠️")
@@ -432,10 +441,108 @@ class PDFCropperApp:
             messagebox.showinfo("完成", f"处理完成\n成功: {total_success} 个文件\n失败: {total_failed} 个文件")
         else:
             self.status_var.set(f"成功处理 {total_success} 个文件")
-            messagebox.showinfo("完成", f"成功处理 {total_success} 个PDF文件")
+            messagebox.showinfo("完成", f"成功处理 {total_success} 个文件")
         
         # 1秒后恢复原始图标
         self.root.after(1000, lambda: self.drop_icon_label.config(text="📄"))
+
+    def crop_image(self, input_path, output_path):
+        """剪裁图片白边"""
+        # 打开图片
+        img = Image.open(input_path)
+        
+        # 确保图片是RGB模式，以便于处理
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # 将图片转换为numpy数组
+        np_img = np.array(img)
+        
+        # 计算图片亮度
+        brightness = np.mean(np_img, axis=2)
+        
+        # 使用阈值确定非白色像素
+        threshold = 225
+        mask = brightness < threshold
+        
+        # 找到内容区域边界
+        if np.any(mask):  # 如果有任何内容
+            rows = np.where(np.any(mask, axis=1))[0]
+            cols = np.where(np.any(mask, axis=0))[0]
+            
+            if len(rows) > 0 and len(cols) > 0:
+                min_y, max_y = np.min(rows), np.max(rows)
+                min_x, max_x = np.min(cols), np.max(cols)
+                
+                # 噪点过滤
+                min_content_size = 10
+                if (max_x - min_x) > min_content_size and (max_y - min_y) > min_content_size:
+                    # 获取边距设置
+                    left_margin = self.left_margin_var.get()
+                    top_margin = self.top_margin_var.get()
+                    right_margin = self.right_margin_var.get()
+                    bottom_margin = self.bottom_margin_var.get()
+                    
+                    # 计算裁剪区域（添加边距）
+                    x1 = max(min_x - left_margin, 0)
+                    y1 = max(min_y - top_margin, 0)
+                    x2 = min(max_x + right_margin, np_img.shape[1])
+                    y2 = min(max_y + bottom_margin, np_img.shape[0])
+                    
+                    # 内容区域有效性验证
+                    width, height = np_img.shape[1], np_img.shape[0]
+                    
+                    # 防止裁剪过多 - 如果内容区域太小，可能是错误检测
+                    if (x2 - x1) < width * 0.1 or (y2 - y1) < height * 0.1:
+                        x1, y1, x2, y2 = 0, 0, width, height
+                    
+                    # 防止裁剪过少 - 如果内容区域几乎和页面一样大，微调一下裁剪区域
+                    if (x2 - x1) > width * 0.98 or (y2 - y1) > height * 0.98:
+                        margin_x = width * 0.02
+                        margin_y = height * 0.02
+                        x1, y1 = margin_x, margin_y
+                        x2, y2 = width - margin_x, height - margin_y
+                    
+                    # 裁剪图片
+                    cropped_img = img.crop((x1, y1, x2, y2))
+                    
+                    # 保存裁剪后的图片
+                    if input_path == output_path:
+                        # 如果覆盖原文件，先保存为临时文件再替换
+                        temp_path = output_path + ".temp"
+                        # 获取原文件的扩展名
+                        _, ext = os.path.splitext(input_path)
+                        # 确保临时文件保留原始扩展名
+                        cropped_img.save(temp_path, format=self.get_image_format(ext))
+                        cropped_img.close()
+                        img.close()
+                        os.replace(temp_path, output_path)
+                    else:
+                        # 直接保存到新位置
+                        _, ext = os.path.splitext(output_path)
+                        cropped_img.save(output_path, format=self.get_image_format(ext))
+                        cropped_img.close()
+                        img.close()
+                    return
+        
+        # 如果没有检测到内容或检测失败，保存原图
+        if input_path != output_path:
+            _, ext = os.path.splitext(output_path)
+            img.save(output_path, format=self.get_image_format(ext))
+        img.close()
+    
+    def get_image_format(self, ext):
+        """根据文件扩展名获取图片格式"""
+        ext = ext.lower().strip('.')
+        # 处理特殊情况
+        if ext == 'jpg':
+            return 'JPEG'
+        elif ext == 'tif':
+            return 'TIFF'
+        elif ext in ('jpeg', 'png', 'bmp', 'tiff', 'gif'):
+            return ext.upper()
+        # 默认返回PNG格式
+        return 'PNG'
     
     def crop_pdf(self, input_path, output_path):
         """剪裁PDF文件白边"""
