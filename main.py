@@ -6,8 +6,6 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 import fitz  # PyMuPDF
 import threading
 import configparser
-from pathlib import Path
-import re
 import numpy as np  # 添加numpy库
 
 # 判断是否在打包环境中运行
@@ -24,8 +22,8 @@ class PDFCropperApp:
     def __init__(self, root):
         self.root = root
         self.root.title("PDF白边剪裁工具")
-        self.root.geometry("600x700")  # 增加默认窗口大小
-        self.root.minsize(600, 700)  # 增加最小窗口大小
+        self.root.geometry("500x700")  # 增加默认窗口大小
+        self.root.minsize(500, 700)  # 增加最小窗口大小
         
         # 设置窗口图标（如果有的话）
         try:
