@@ -180,9 +180,6 @@ class PDFCropperApp:
         # 绑定事件处理滚动和调整大小
         self.main_frame.bind("<Configure>", self.on_frame_configure)
         self.canvas.bind("<Configure>", self.on_canvas_configure)
-        self.root.bind_all("<MouseWheel>", self.on_mousewheel)  # Windows滚轮
-        self.root.bind_all("<Button-4>", self.on_mousewheel)  # Linux上滚
-        self.root.bind_all("<Button-5>", self.on_mousewheel)  # Linux下滚
         
         # 添加边距
         self.main_frame.pack_configure(padx=20, pady=20)
@@ -558,6 +555,11 @@ class PDFCropperApp:
         right_margin = self.right_margin_var.get()
         bottom_margin = self.bottom_margin_var.get()
         
+        # 创建调试输出目录
+        debug_dir = os.path.join(os.path.dirname(output_path), "debug_output")
+        if not os.path.exists(debug_dir):
+            os.makedirs(debug_dir)
+        
         # 处理每一页
         for page_num in range(len(doc)):
             try:
@@ -569,7 +571,7 @@ class PDFCropperApp:
                 # 使用pixmap分析页面内容
                 try:
                     # 提高分辨率以获取更精确的边界
-                    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 增加到3倍采样
+                    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 增加到10倍采样
                     img_data = pix.samples
                     width, height = pix.width, pix.height
                     
@@ -577,6 +579,10 @@ class PDFCropperApp:
                     channels = pix.n
                     # 将原始数据转换为numpy数组
                     np_img = np.frombuffer(img_data, dtype=np.uint8).reshape(height, width, channels)
+                    
+                    # 保存原始图像用于调试
+                    debug_img_path = os.path.join(debug_dir, f"page_{page_num+1}_original.png")
+                    Image.fromarray(np_img).save(debug_img_path)
                     
                     # 计算亮度 - 对于RGB图像取平均值，对于灰度图像直接使用值
                     if channels >= 3:
@@ -586,53 +592,72 @@ class PDFCropperApp:
                         # 对于灰度图像
                         brightness = np_img[:, :, 0]
                     
+                    # 保存亮度图用于调试
+                    debug_brightness_path = os.path.join(debug_dir, f"page_{page_num+1}_brightness.png")
+                    Image.fromarray(brightness.astype(np.uint8)).save(debug_brightness_path)
+                    
                     # 根据阈值创建掩码
-                    threshold = 225  # 稍微调低阈值以捕获更多内容
+                    threshold = 245  # 阈值
                     mask = brightness < threshold
+                    
+                    # 保存掩码图用于调试
+                    debug_mask_path = os.path.join(debug_dir, f"page_{page_num+1}_mask.png")
+                    Image.fromarray((mask * 255).astype(np.uint8)).save(debug_mask_path)
                     
                     # 根据掩码找到内容区域边界
                     if np.any(mask):  # 如果有任何内容
-                        # 找到所有非零点的行列索引
-                        rows = np.where(np.any(mask, axis=1))[0]
-                        cols = np.where(np.any(mask, axis=0))[0]
+                        # 从四个方向向中间扫描
+                        # 从左向右扫描
+                        left_bound = 0
+                        for x in range(width):
+                            if np.any(mask[:, x]):
+                                left_bound = x
+                                break
                         
-                        if len(rows) > 0 and len(cols) > 0:
-                            min_y, max_y = np.min(rows), np.max(rows)
-                            min_x, max_x = np.min(cols), np.max(cols)
-                            
-                            # 噪点过滤参数
-                            min_content_size = 10  # 最小内容尺寸，像素小于此值视为噪点
-                            
-                            # 过滤小区域噪点
-                            if (max_x - min_x) > min_content_size and (max_y - min_y) > min_content_size:
-                                # 将像素坐标转换回页面坐标
-                                min_x = min_x * rect.width / width
-                                min_y = min_y * rect.height / height
-                                max_x = max_x * rect.width / width
-                                max_y = max_y * rect.height / height
-                                
-                                content_rect = fitz.Rect(min_x, min_y, max_x, max_y)
-                            else:
-                                content_rect = rect  # 检测到的区域过小，可能是噪点，使用整个页面
-                        else:
-                            content_rect = rect  # 没有找到有效的行或列
+                        # 从右向左扫描
+                        right_bound = width - 1
+                        for x in range(width-1, -1, -1):
+                            if np.any(mask[:, x]):
+                                right_bound = x
+                                break
+                        
+                        # 从上向下扫描
+                        top_bound = 0
+                        for y in range(height):
+                            if np.any(mask[y, :]):
+                                top_bound = y
+                                break
+                        
+                        # 从下向上扫描
+                        bottom_bound = height - 1
+                        for y in range(height-1, -1, -1):
+                            if np.any(mask[y, :]):
+                                bottom_bound = y
+                                break
+                        
+                        # 将像素坐标转换回页面坐标
+                        min_x = left_bound * rect.width / width
+                        min_y = top_bound * rect.height / height
+                        max_x = right_bound * rect.width / width
+                        max_y = bottom_bound * rect.height / height
+                        
+                        content_rect = fitz.Rect(min_x, min_y, max_x, max_y)
+                        
+                        # 创建可视化图像，在原始图像上绘制检测到的内容区域
+                        debug_visual_path = os.path.join(debug_dir, f"page_{page_num+1}_content_rect.png")
+                        visual_img = np_img.copy()
+                        # 绘制矩形边界
+                        visual_img[top_bound:bottom_bound+1, left_bound:left_bound+5] = [255, 0, 0]  # 左边界
+                        visual_img[top_bound:bottom_bound+1, right_bound-4:right_bound+1] = [255, 0, 0]  # 右边界
+                        visual_img[top_bound:top_bound+5, left_bound:right_bound+1] = [255, 0, 0]  # 上边界
+                        visual_img[bottom_bound-4:bottom_bound+1, left_bound:right_bound+1] = [255, 0, 0]  # 下边界
+                        Image.fromarray(visual_img).save(debug_visual_path)
                     else:
                         content_rect = rect  # 未发现内容，使用整个页面
                 except Exception as e:
                     print(f"像素分析出错: {str(e)}")
                     content_rect = rect  # 出错时使用整个页面
-                
-                # 内容区域有效性验证
-                # 防止裁剪过多 - 如果内容区域太小，可能是错误检测
-                if content_rect.width < rect.width * 0.1 or content_rect.height < rect.height * 0.1:
-                    print(f"检测到的内容区域过小，使用整个页面: {content_rect}")
-                    content_rect = rect
-                
-                # 防止裁剪过少 - 如果内容区域几乎和页面一样大，微调一下裁剪区域
-                if content_rect.width > rect.width * 0.98 or content_rect.height > rect.height * 0.98:
-                    margin_x = rect.width * 0.02
-                    margin_y = rect.height * 0.02
-                    content_rect = fitz.Rect(margin_x, margin_y, rect.width - margin_x, rect.height - margin_y)
+
                 
                 # 应用边距
                 crop_box = fitz.Rect(
@@ -647,7 +672,22 @@ class PDFCropperApp:
                 
                 # 创建新页面并插入裁剪后的内容
                 new_page = new_doc.new_page(width=crop_box.width, height=crop_box.height)
-                new_page.show_pdf_page(new_page.rect, doc, page_num, clip=crop_box)
+                
+                # 计算源矩形和目标矩形
+                # 注意：PyMuPDF的坐标系统是从左下角开始的，而图像处理是从左上角开始的
+                # 需要转换y坐标
+                src_rect = fitz.Rect(
+                    crop_box.x0,
+                    rect.height - crop_box.y1,  # 转换y坐标
+                    crop_box.x1,
+                    rect.height - crop_box.y0   # 转换y坐标
+                )
+                
+                # 目标矩形从(0,0)开始，使用转换后的高度
+                dst_rect = fitz.Rect(0, 0, crop_box.width, crop_box.height)
+                
+                # 使用正确的源矩形和目标矩形进行页面复制
+                new_page.show_pdf_page(dst_rect, doc, page_num, clip=src_rect)
                 
             except Exception as e:
                 # 如果处理当前页面出错，保留原始页面
@@ -691,19 +731,6 @@ class PDFCropperApp:
         else:
             self.scrollbar.pack_forget()  # 隐藏滚动条
     
-    def on_mousewheel(self, event):
-        """鼠标滚轮事件处理"""
-        # 检测平台并相应处理
-        if hasattr(event, 'num'):  # Linux
-            if event.num == 4:  # 向上滚动
-                self.canvas.yview_scroll(-1, "units")
-            elif event.num == 5:  # 向下滚动
-                self.canvas.yview_scroll(1, "units")
-        elif hasattr(event, 'delta'):  # Windows
-            if event.delta > 0:  # 向上滚动
-                self.canvas.yview_scroll(-1, "units")
-            elif event.delta < 0:  # 向下滚动
-                self.canvas.yview_scroll(1, "units")
 
     def delayed_layout_update(self):
         """设置定时器更新界面布局，确保滚动区域计算准确"""
