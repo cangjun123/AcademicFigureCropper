@@ -657,7 +657,18 @@ class PDFCropperApp:
                 except Exception as e:
                     print(f"像素分析出错: {str(e)}")
                     content_rect = rect  # 出错时使用整个页面
-
+                
+                # 内容区域有效性验证
+                # 防止裁剪过多 - 如果内容区域太小，可能是错误检测
+                # if content_rect.width < rect.width * 0.1 or content_rect.height < rect.height * 0.1:
+                #     print(f"检测到的内容区域过小，使用整个页面: {content_rect}")
+                #     content_rect = rect
+                
+                # 防止裁剪过少 - 如果内容区域几乎和页面一样大，微调一下裁剪区域
+                # if content_rect.width > rect.width * 0.98 or content_rect.height > rect.height * 0.98:
+                #     margin_x = rect.width * 0.02
+                #     margin_y = rect.height * 0.02
+                #     content_rect = fitz.Rect(margin_x, margin_y, rect.width - margin_x, rect.height - margin_y)
                 
                 # 应用边距
                 crop_box = fitz.Rect(
@@ -672,22 +683,7 @@ class PDFCropperApp:
                 
                 # 创建新页面并插入裁剪后的内容
                 new_page = new_doc.new_page(width=crop_box.width, height=crop_box.height)
-                
-                # 计算源矩形和目标矩形
-                # 注意：PyMuPDF的坐标系统是从左下角开始的，而图像处理是从左上角开始的
-                # 需要转换y坐标
-                src_rect = fitz.Rect(
-                    crop_box.x0,
-                    rect.height - crop_box.y1,  # 转换y坐标
-                    crop_box.x1,
-                    rect.height - crop_box.y0   # 转换y坐标
-                )
-                
-                # 目标矩形从(0,0)开始，使用转换后的高度
-                dst_rect = fitz.Rect(0, 0, crop_box.width, crop_box.height)
-                
-                # 使用正确的源矩形和目标矩形进行页面复制
-                new_page.show_pdf_page(dst_rect, doc, page_num, clip=src_rect)
+                new_page.show_pdf_page(new_page.rect, doc, page_num, clip=crop_box)
                 
             except Exception as e:
                 # 如果处理当前页面出错，保留原始页面
@@ -731,7 +727,6 @@ class PDFCropperApp:
         else:
             self.scrollbar.pack_forget()  # 隐藏滚动条
     
-
     def delayed_layout_update(self):
         """设置定时器更新界面布局，确保滚动区域计算准确"""
         self.on_frame_configure(None)
