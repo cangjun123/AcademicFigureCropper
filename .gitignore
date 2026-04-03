@@ -1,4 +1,4 @@
- # Python相关
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,27 +20,29 @@ wheels/
 .installed.cfg
 *.egg
 
-# 打包相关
+# Packaging
 *.spec
+!AcademicFigureCropper.spec
 
-# 个人配置文件
+# Local config
 pdf_cropper_config.ini
 
-# 虚拟环境
+# Virtual environments
 venv/
 env/
 ENV/
+.build-venv/
 
-# IDE相关
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# 操作系统相关
+# OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# 日志文件
+# Logs
 *.log

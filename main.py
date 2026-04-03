@@ -1,5 +1,7 @@
 import os
 import sys
+import ctypes
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -20,12 +22,61 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+def get_config_path(filename):
+    """Resolve a writable config path for both source and packaged runs."""
+    candidate_dirs = []
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidate_dirs.append(os.path.join(local_appdata, "AcademicFigureCropper"))
+
+    home_dir = os.path.expanduser("~")
+    if home_dir:
+        candidate_dirs.append(os.path.join(home_dir, ".academic_figure_cropper"))
+
+    candidate_dirs.append(os.path.abspath("."))
+
+    for directory in candidate_dirs:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            probe_path = os.path.join(directory, ".write_test")
+            with open(probe_path, "w", encoding="utf-8") as probe_file:
+                probe_file.write("ok")
+            os.remove(probe_path)
+            return os.path.join(directory, filename)
+        except OSError:
+            continue
+
+    return os.path.join(os.path.abspath("."), filename)
+
+def enable_high_dpi():
+    """Try to make the process DPI-aware on Windows to avoid bitmap-scaled blurry UI."""
+    if not sys.platform.startswith("win"):
+        return
+
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        return
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 class PDFCropperApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Academic Figure Cropper")
-        self.root.geometry("500x700")  # 增加默认窗口大小
-        self.root.minsize(500, 700)  # 增加最小窗口大小
+        self.root.geometry("420x370")
+        self.root.minsize(390, 320)
+        self.root.resizable(False, False)
         
         # 设置窗口图标（如果有的话）
         try:
@@ -36,73 +87,65 @@ class PDFCropperApp:
             print(f"加载图标失败: {e}")
             pass
         
-        # 设置窗口始终置顶
-        self.root.attributes("-topmost", True)
-        
-        # 设置主题色 - 更现代的配色方案
-        self.primary_color = "#2979ff"  # 蓝色主色调
-        self.accent_color = "#ff9100"   # 橙色强调色
-        self.bg_color = "#fafafa"       # 浅灰背景
-        self.card_bg_color = "#ffffff"  # 卡片背景色
-        self.text_color = "#212121"     # 深灰文本
-        self.secondary_text = "#757575" # 次要文本颜色
-        self.button_text_color = "#ffffff"  # 按钮文字颜色为白色
-        self.border_color = "#e0e0e0"   # 边框颜色
+        # 设置主题色
+        self.primary_color = "#2563eb"
+        self.primary_soft_color = "#dbeafe"
+        self.primary_hover_color = "#1d4ed8"
+        self.success_color = "#16a34a"
+        self.success_soft_color = "#dcfce7"
+        self.warning_color = "#ea580c"
+        self.warning_soft_color = "#ffedd5"
+        self.bg_color = "#eff3f8"
+        self.card_bg_color = "#ffffff"
+        self.muted_bg_color = "#f8fafc"
+        self.text_color = "#0f172a"
+        self.secondary_text = "#64748b"
+        self.button_text_color = "#ffffff"
+        self.border_color = "#d8e1eb"
+        self.drop_border_color = "#c7d7ea"
+        self.disabled_text_color = "#94a3b8"
+        self.font_family = "Microsoft YaHei UI" if sys.platform.startswith("win") else "Segoe UI"
+        self.title_font = (self.font_family, 11, "bold")
+        self.body_font = (self.font_family, 10)
+        self.small_font = (self.font_family, 9)
+        self.drop_title_font = (self.font_family, 15, "bold")
+        self.badge_font = (self.font_family, 9, "bold")
         
         # 支持的图片格式
         self.supported_img_formats = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif')
-        self.save_debug_images = False
         
         # 配置样式
         self.style = ttk.Style()
-        self.style.configure("TFrame", background=self.bg_color)
-        self.style.configure("Card.TFrame", background=self.card_bg_color, relief="flat")
-        
-        # 标签样式
-        self.style.configure("TLabel", background=self.bg_color, foreground=self.text_color, font=("微软雅黑", 9))
-        self.style.configure("Title.TLabel", background=self.bg_color, foreground=self.primary_color, font=("微软雅黑", 18, "bold"))
-        self.style.configure("Subtitle.TLabel", background=self.bg_color, foreground=self.secondary_text, font=("微软雅黑", 11))
-        self.style.configure("Card.TLabel", background=self.card_bg_color, foreground=self.text_color, font=("微软雅黑", 9))
-        
-        # 按钮样式
-        self.style.configure("TButton", background=self.primary_color, foreground=self.button_text_color, font=("微软雅黑", 9))
-        self.style.map("TButton", 
-                      background=[('active', self.primary_color), ('pressed', '#1c54b2')],
-                      foreground=[('active', self.button_text_color), ('pressed', self.button_text_color)])
-        
-        self.style.configure("Accent.TButton", background=self.accent_color, foreground=self.button_text_color, font=("微软雅黑", 9))
-        self.style.map("Accent.TButton", 
-                      background=[('active', self.accent_color), ('pressed', '#c56200')],
-                      foreground=[('active', self.button_text_color), ('pressed', self.button_text_color)])
-        
-        # 复选框样式
-        self.style.configure("TCheckbutton", background=self.bg_color, font=("微软雅黑", 9))
-        self.style.map("TCheckbutton", 
-                     background=[('active', self.bg_color)],
-                     foreground=[('active', self.primary_color)])
-        
-        # 框架样式
-        self.style.configure("TLabelframe", background=self.card_bg_color, bordercolor=self.border_color)
-        self.style.configure("TLabelframe.Label", background=self.bg_color, foreground=self.primary_color, font=("微软雅黑", 10, "bold"))
-        
-        # 滚动条样式
-        self.style.configure("Vertical.TScrollbar", gripcount=0, background=self.bg_color, troughcolor=self.bg_color, 
-                          arrowcolor=self.primary_color, bordercolor=self.border_color)
-        
-        # 进度条样式
-        self.style.configure("TProgressbar", background=self.primary_color, troughcolor=self.border_color, 
-                          bordercolor=self.border_color, lightcolor=self.primary_color, darkcolor=self.primary_color)
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            pass
+        self.style.configure(
+            "Slim.Horizontal.TProgressbar",
+            background=self.primary_color,
+            troughcolor=self.muted_bg_color,
+            bordercolor=self.muted_bg_color,
+            lightcolor=self.primary_color,
+            darkcolor=self.primary_color,
+            thickness=8,
+        )
         
         # 设置背景色
         self.root.configure(bg=self.bg_color)
         
         # 创建配置文件管理
         config_name = "pdf_cropper_config.ini"
-        # 使用用户目录保存配置文件，确保打包后也能正常读写
-        user_dir = os.path.expanduser("~")
-        self.config_file = os.path.join(user_dir, config_name)
+        self.config_file = get_config_path(config_name)
         self.config = configparser.ConfigParser()
         self.load_config()
+        self.save_debug_images = self.config.getboolean('Settings', 'save_debug_images')
+        self.is_processing = False
+        self.advanced_visible = False
+        self.last_output_dir = ""
+        self._layout_update_job = None
+        self._pending_canvas_width = None
+        self._last_canvas_width = None
+        self.root.attributes("-topmost", self.config.getboolean('Settings', 'always_on_top'))
         
         # 进度变量
         self.progress_var = tk.DoubleVar()
@@ -114,13 +157,6 @@ class PDFCropperApp:
         
         # 处理的文件列表
         self.processing_files = []
-        
-        # 在初始化完成后进行更新，确保组件正确显示
-        self.root.update_idletasks()
-        self.on_frame_configure(None)
-        
-        # 设置定时器更新界面布局，确保滚动区域计算准确
-        self.root.after(100, self.delayed_layout_update)
         self.root.after(50, self.process_ui_queue)
         
     def load_config(self):
@@ -148,220 +184,661 @@ class PDFCropperApp:
             
         if 'bottom_margin' not in self.config['Settings']:
             self.config['Settings']['bottom_margin'] = '0'
+
+        if 'always_on_top' not in self.config['Settings']:
+            self.config['Settings']['always_on_top'] = 'True'
+
+        if 'save_debug_images' not in self.config['Settings']:
+            self.config['Settings']['save_debug_images'] = 'False'
     
     def save_config(self):
         """保存配置到文件"""
-        with open(self.config_file, 'w') as f:
-            self.config.write(f)
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                self.config.write(f)
+        except OSError as exc:
+            print(f"保存配置失败: {exc}")
     
     def create_widgets(self):
         """创建UI元素"""
-        # 创建底部状态栏（先创建，确保它在底部）
-        self.status_bar = ttk.Frame(self.root, relief=tk.SUNKEN, style="TFrame")
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.status_text = ttk.Label(self.status_bar, text="就绪", padding=(5, 2))
-        self.status_text.pack(side=tk.LEFT)
-        
-        self.version_label = ttk.Label(self.status_bar, text="v1.1", padding=(5, 2))
-        self.version_label.pack(side=tk.RIGHT)
-        
-        # 创建带滚动条的主容器
-        self.canvas = tk.Canvas(self.root, bg=self.bg_color, highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.canvas.yview, style="Vertical.TScrollbar")
-        
-        # 配置布局
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # 关联滚动条和画布
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        
-        # 创建主框架
-        self.main_frame = ttk.Frame(self.canvas)
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.main_frame, anchor="nw", tags="self.main_frame")
-        
-        # 绑定事件处理滚动和调整大小
-        self.main_frame.bind("<Configure>", self.on_frame_configure)
-        self.canvas.bind("<Configure>", self.on_canvas_configure)
-        
-        # 添加边距
-        self.main_frame.pack_configure(padx=20, pady=20)
-        
-        # 创建标题和描述区域
-        title_frame = ttk.Frame(self.main_frame)
-        title_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        title_label = ttk.Label(title_frame, text="Academic Figure Cropper", style="Title.TLabel")
-        title_label.pack(side=tk.TOP, anchor=tk.W)
-        
-        description = ttk.Label(title_frame, 
-                              text="拖放PDF或图片文件到下方区域，自动剪裁白边并保存", 
-                              style="Subtitle.TLabel")
-        description.pack(side=tk.TOP, anchor=tk.W, pady=(5, 0))
-        
-        # 拖放区域 - 使用卡片风格
-        self.drop_frame = ttk.LabelFrame(self.main_frame, text="拖放区域")
-        self.drop_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
-        
-        self.drop_area = ttk.Frame(self.drop_frame, style="Card.TFrame")
-        self.drop_area.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # 创建一个居中的容器
-        drop_center_frame = ttk.Frame(self.drop_area, style="Card.TFrame")
-        drop_center_frame.pack(expand=True, pady=20)
-        
-        self.drop_icon_label = ttk.Label(drop_center_frame, text="📄", font=("微软雅黑", 48), style="Card.TLabel")
-        self.drop_icon_label.pack(pady=(10, 15))
-        
-        self.drop_label = ttk.Label(drop_center_frame, text="拖放PDF或图片文件到这里", font=("微软雅黑", 12, "bold"), style="Card.TLabel")
-        self.drop_label.pack(pady=(0, 10))
-        
-        self.drop_hint = ttk.Label(drop_center_frame, text="支持PDF和常见图片格式(.jpg, .png等)", style="Card.TLabel")
-        self.drop_hint.pack()
-        
-        # 为整个拖放区域绑定拖放事件
-        for widget in [self.drop_area, drop_center_frame, self.drop_icon_label, self.drop_label, self.drop_hint]:
+        self.container = tk.Frame(self.root, bg=self.bg_color)
+        self.container.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        self.header_frame = tk.Frame(self.container, bg=self.bg_color)
+        self.header_frame.pack(fill=tk.X)
+
+        self.title_frame = tk.Frame(self.header_frame, bg=self.bg_color)
+        self.title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.title_label = tk.Label(
+            self.title_frame,
+            text="Academic Figure Cropper",
+            font=self.title_font,
+            fg=self.text_color,
+            bg=self.bg_color,
+        )
+        self.title_label.pack(anchor=tk.W)
+        self.subtitle_label = tk.Label(
+            self.title_frame,
+            text="拖入文件即可自动裁白边",
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.bg_color,
+        )
+        self.subtitle_label.pack(anchor=tk.W, pady=(2, 0))
+
+        header_actions = tk.Frame(self.header_frame, bg=self.bg_color)
+        header_actions.pack(side=tk.RIGHT)
+
+        self.topmost_var = tk.BooleanVar(value=self.config.getboolean('Settings', 'always_on_top'))
+        self.topmost_button = self.create_flat_button(header_actions, "", self.toggle_topmost, compact=True)
+        self.topmost_button.pack(side=tk.LEFT)
+        self.bind_window_drag([self.header_frame, self.title_frame, self.title_label, self.subtitle_label])
+
+        self.scroll_host = tk.Frame(self.container, bg=self.bg_color)
+        self.scroll_host.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+
+        self.scroll_canvas = tk.Canvas(
+            self.scroll_host,
+            bg=self.bg_color,
+            highlightthickness=0,
+            bd=0,
+            relief=tk.FLAT,
+        )
+        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.content_frame = tk.Frame(self.scroll_canvas, bg=self.bg_color)
+        self.canvas_window = self.scroll_canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
+
+        self.content_frame.bind("<Configure>", self.on_frame_configure)
+        self.scroll_canvas.bind("<Configure>", self.on_canvas_configure)
+        self.root.bind_all("<MouseWheel>", self.on_mousewheel)
+        self.root.bind_all("<Button-4>", self.on_mousewheel)
+        self.root.bind_all("<Button-5>", self.on_mousewheel)
+
+        self.drop_card = tk.Frame(
+            self.content_frame,
+            bg=self.card_bg_color,
+            highlightthickness=1,
+            highlightbackground=self.drop_border_color,
+            highlightcolor=self.drop_border_color,
+        )
+        self.drop_card.pack(fill=tk.BOTH, expand=True, pady=(12, 10))
+
+        self.drop_body = tk.Frame(self.drop_card, bg=self.card_bg_color, padx=16, pady=14)
+        self.drop_body.pack(fill=tk.BOTH, expand=True)
+
+        drop_center_frame = tk.Frame(self.drop_body, bg=self.card_bg_color)
+        drop_center_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.drop_badge = tk.Label(
+            drop_center_frame,
+            text="DROP",
+            font=self.badge_font,
+            fg=self.primary_color,
+            bg=self.primary_soft_color,
+            padx=10,
+            pady=4,
+        )
+        self.drop_badge.pack(anchor=tk.CENTER, pady=(4, 10))
+
+        self.drop_label = tk.Label(
+            drop_center_frame,
+            text="拖入 PDF 或图片",
+            font=self.drop_title_font,
+            fg=self.text_color,
+            bg=self.card_bg_color,
+        )
+        self.drop_label.pack()
+
+        self.drop_hint = tk.Label(
+            drop_center_frame,
+            text="自动裁白边并保存",
+            font=self.body_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        )
+        self.drop_hint.pack(pady=(6, 12))
+
+        self.pick_button = self.create_flat_button(drop_center_frame, "选择文件", self.select_files, primary=True)
+        self.pick_button.pack()
+
+        status_frame = tk.Frame(self.drop_body, bg=self.card_bg_color)
+        status_frame.pack(fill=tk.X, pady=(14, 0))
+
+        self.status_var = tk.StringVar(value="等待文件")
+        self.status_label = tk.Label(
+            status_frame,
+            textvariable=self.status_var,
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        )
+        self.status_label.pack(anchor=tk.W)
+
+        self.progress = ttk.Progressbar(
+            status_frame,
+            variable=self.progress_var,
+            mode='determinate',
+            style="Slim.Horizontal.TProgressbar",
+        )
+        self.progress.pack(fill=tk.X, pady=(8, 0))
+
+        self.bind_drop_targets([
+            self.drop_card,
+            self.drop_body,
+            drop_center_frame,
+            self.drop_badge,
+            self.drop_label,
+            self.drop_hint,
+        ])
+
+        self.toolbar_card = tk.Frame(
+            self.content_frame,
+            bg=self.card_bg_color,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.border_color,
+        )
+        self.toolbar_card.pack(fill=tk.X)
+
+        toolbar_body = tk.Frame(self.toolbar_card, bg=self.card_bg_color, padx=10, pady=10)
+        toolbar_body.pack(fill=tk.X)
+
+        mode_frame = tk.Frame(toolbar_body, bg=self.card_bg_color)
+        mode_frame.pack(fill=tk.X)
+
+        self.overwrite_var = tk.BooleanVar(value=self.config.getboolean('Settings', 'overwrite_original'))
+        self.overwrite_button = self.create_flat_button(
+            mode_frame,
+            "覆盖原文件",
+            lambda: self.set_output_mode(True),
+            compact=True,
+        )
+        self.overwrite_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        self.output_dir_button = self.create_flat_button(
+            mode_frame,
+            "输出到目录",
+            lambda: self.set_output_mode(False),
+            compact=True,
+        )
+        self.output_dir_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.output_path_var = tk.StringVar(value=self.config.get('Settings', 'output_dir'))
+        self.output_path_label = tk.Label(
+            toolbar_body,
+            text="输出目录",
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        )
+        self.output_path_label.pack(anchor=tk.W, pady=(10, 6))
+
+        self.output_path_row = tk.Frame(toolbar_body, bg=self.card_bg_color)
+        self.output_path_row.pack(fill=tk.X)
+
+        self.output_entry = tk.Entry(
+            self.output_path_row,
+            textvariable=self.output_path_var,
+            font=self.small_font,
+            relief=tk.FLAT,
+            bd=0,
+            bg=self.muted_bg_color,
+            fg=self.text_color,
+            insertbackground=self.text_color,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.primary_color,
+            disabledbackground=self.muted_bg_color,
+            disabledforeground=self.disabled_text_color,
+        )
+        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
+        self.output_entry.bind("<FocusOut>", self.persist_output_path)
+        self.output_entry.bind("<Return>", self.persist_output_path)
+
+        self.output_browse_button = self.create_flat_button(
+            self.output_path_row,
+            "浏览",
+            self.select_output_dir,
+            compact=True,
+        )
+        self.output_browse_button.pack(side=tk.LEFT, padx=(8, 6))
+
+        self.output_open_button = self.create_flat_button(
+            self.output_path_row,
+            "打开",
+            self.open_output_dir,
+            compact=True,
+        )
+        self.output_open_button.pack(side=tk.LEFT)
+
+        self.output_mode_hint_var = tk.StringVar(value="")
+        self.output_mode_hint_label = tk.Label(
+            toolbar_body,
+            textvariable=self.output_mode_hint_var,
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        )
+        self.output_mode_hint_label.pack(anchor=tk.W, pady=(6, 0))
+
+        margin_row = tk.Frame(toolbar_body, bg=self.card_bg_color)
+        margin_row.pack(fill=tk.X, pady=(10, 0))
+
+        tk.Label(
+            margin_row,
+            text="留白",
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        ).pack(side=tk.LEFT)
+
+        self.uniform_margin_var = tk.StringVar()
+        self.uniform_margin_spin = tk.Spinbox(
+            margin_row,
+            from_=0,
+            to=50,
+            width=5,
+            textvariable=self.uniform_margin_var,
+            command=self.apply_uniform_margin,
+            font=self.small_font,
+            justify="center",
+            relief=tk.FLAT,
+            bd=0,
+            bg=self.muted_bg_color,
+            fg=self.text_color,
+            buttonbackground=self.muted_bg_color,
+            insertbackground=self.text_color,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.primary_color,
+        )
+        self.uniform_margin_spin.pack(side=tk.LEFT, padx=(8, 6), ipady=5)
+        self.uniform_margin_spin.bind("<FocusOut>", self.apply_uniform_margin)
+        self.uniform_margin_spin.bind("<Return>", self.apply_uniform_margin)
+
+        tk.Label(
+            margin_row,
+            text="px",
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        ).pack(side=tk.LEFT)
+
+        self.margin_details_button = self.create_flat_button(
+            margin_row,
+            "",
+            self.toggle_advanced_options,
+            compact=True,
+        )
+        self.margin_details_button.pack(side=tk.RIGHT)
+
+        self.margin_summary_var = tk.StringVar(value="")
+        self.margin_summary_label = tk.Label(
+            toolbar_body,
+            textvariable=self.margin_summary_var,
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        )
+        self.margin_summary_label.pack(anchor=tk.W, pady=(6, 0))
+
+        self.advanced_panel = tk.Frame(
+            self.content_frame,
+            bg=self.card_bg_color,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.border_color,
+        )
+
+        advanced_body = tk.Frame(self.advanced_panel, bg=self.card_bg_color, padx=12, pady=12)
+        advanced_body.pack(fill=tk.X)
+
+        tk.Label(
+            advanced_body,
+            text="额外留白 (px)",
+            font=self.body_font,
+            fg=self.text_color,
+            bg=self.card_bg_color,
+        ).pack(anchor=tk.W)
+        tk.Label(
+            advanced_body,
+            text="裁剪后额外保留的空白，0 表示贴边裁剪。",
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        ).pack(anchor=tk.W, pady=(2, 10))
+
+        margins_grid = tk.Frame(advanced_body, bg=self.card_bg_color)
+        margins_grid.pack(fill=tk.X)
+        margins_grid.grid_columnconfigure(0, weight=1)
+        margins_grid.grid_columnconfigure(1, weight=1)
+
+        self.left_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'left_margin')))
+        self.right_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'right_margin')))
+        self.top_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'top_margin')))
+        self.bottom_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'bottom_margin')))
+
+        self.left_margin_spin = self.create_margin_field(margins_grid, "左", self.left_margin_var, 0, 0)
+        self.right_margin_spin = self.create_margin_field(margins_grid, "右", self.right_margin_var, 0, 1)
+        self.top_margin_spin = self.create_margin_field(margins_grid, "上", self.top_margin_var, 1, 0)
+        self.bottom_margin_spin = self.create_margin_field(margins_grid, "下", self.bottom_margin_var, 1, 1)
+
+        self.update_topmost_button()
+        self.update_advanced_button()
+        self.toggle_output_path()
+        self.set_drop_area_state("idle")
+        self.root.after_idle(self.delayed_layout_update)
+
+    def create_flat_button(self, parent, text, command, primary=False, compact=False):
+        font = self.small_font if compact else self.body_font
+        button = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            font=font,
+            relief=tk.FLAT,
+            bd=0,
+            cursor="hand2",
+            padx=12,
+            pady=6 if compact else 8,
+            disabledforeground=self.disabled_text_color,
+        )
+        if primary:
+            button.configure(
+                bg=self.primary_color,
+                fg=self.button_text_color,
+                activebackground=self.primary_hover_color,
+                activeforeground=self.button_text_color,
+                highlightthickness=1,
+                highlightbackground=self.primary_color,
+                highlightcolor=self.primary_hover_color,
+            )
+        else:
+            button.configure(
+                bg=self.card_bg_color,
+                fg=self.text_color,
+                activebackground=self.muted_bg_color,
+                activeforeground=self.text_color,
+                highlightthickness=1,
+                highlightbackground=self.border_color,
+                highlightcolor=self.border_color,
+            )
+        return button
+
+    def create_margin_field(self, parent, label_text, variable, row, column):
+        field_frame = tk.Frame(parent, bg=self.card_bg_color)
+        field_frame.grid(row=row, column=column, sticky="ew", padx=(0, 8) if column == 0 else (8, 0), pady=(0, 8) if row == 0 else (8, 0))
+
+        tk.Label(
+            field_frame,
+            text=label_text,
+            font=self.small_font,
+            fg=self.secondary_text,
+            bg=self.card_bg_color,
+        ).pack(anchor=tk.W, pady=(0, 4))
+
+        spinbox = tk.Spinbox(
+            field_frame,
+            from_=0,
+            to=50,
+            width=6,
+            textvariable=variable,
+            command=self.save_margins,
+            font=self.small_font,
+            justify="center",
+            relief=tk.FLAT,
+            bd=0,
+            bg=self.muted_bg_color,
+            fg=self.text_color,
+            buttonbackground=self.muted_bg_color,
+            insertbackground=self.text_color,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.primary_color,
+        )
+        spinbox.pack(fill=tk.X, ipady=6)
+        spinbox.bind("<FocusOut>", self.save_margins)
+        spinbox.bind("<Return>", self.save_margins)
+        return spinbox
+
+    def bind_drop_targets(self, widgets):
+        for widget in widgets:
             widget.drop_target_register(DND_FILES)
             widget.dnd_bind('<<Drop>>', self.drop)
-        
-        # 进度条和状态
-        progress_frame = ttk.Frame(self.main_frame, style="TFrame")
-        progress_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        self.status_var = tk.StringVar()
-        self.status_var.set("准备就绪")
-        
-        self.status_label = ttk.Label(progress_frame, textvariable=self.status_var)
-        self.status_label.pack(side=tk.TOP, anchor=tk.W, pady=(0, 5))
-        
-        self.progress = ttk.Progressbar(progress_frame, variable=self.progress_var, length=400, mode='determinate', style="TProgressbar")
-        self.progress.pack(fill=tk.X)
-        
-        # 设置区域 - 使用卡片风格
-        self.settings_frame = ttk.LabelFrame(self.main_frame, text="设置")
-        self.settings_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        # 设置内容框架
-        settings_content = ttk.Frame(self.settings_frame, style="Card.TFrame")
-        settings_content.pack(fill=tk.X, padx=15, pady=15)
-        
-        # 文件输出设置
-        output_frame = ttk.Frame(settings_content, style="Card.TFrame")
-        output_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        output_label = ttk.Label(output_frame, text="文件输出", font=("微软雅黑", 11, "bold"), foreground=self.primary_color, style="Card.TLabel")
-        output_label.grid(row=0, column=0, sticky=tk.W, pady=5)
-        
-        self.overwrite_var = tk.BooleanVar()
-        self.overwrite_var.set(self.config.getboolean('Settings', 'overwrite_original'))
-        self.overwrite_check = ttk.Checkbutton(output_frame, text="覆盖原文件", 
-                                             variable=self.overwrite_var, 
-                                             command=self.toggle_output_path,
-                                             style="TCheckbutton")
-        self.overwrite_check.grid(row=1, column=0, sticky=tk.W, padx=(20, 0))
-        
-        output_dir_frame = ttk.Frame(output_frame, style="Card.TFrame")
-        output_dir_frame.grid(row=2, column=0, sticky=tk.W, padx=(20, 0), pady=5)
-        
-        self.output_path_var = tk.StringVar()
-        saved_path = self.config.get('Settings', 'output_dir')
-        self.output_path_var.set(saved_path if saved_path else "未设置")
-        
-        self.output_entry = ttk.Entry(output_dir_frame, textvariable=self.output_path_var, width=35)
-        self.output_entry.pack(side=tk.LEFT, padx=(0, 5))
-        
-        self.output_button = ttk.Button(output_dir_frame, text="浏览...", 
-                                      command=self.select_output_dir,
-                                      style="TButton",
-                                      state=tk.NORMAL if not self.overwrite_var.get() else tk.DISABLED)
-        self.output_button.pack(side=tk.LEFT)
-        
-        # 边距设置框架
-        margins_frame = ttk.Frame(settings_content, style="Card.TFrame")
-        margins_frame.pack(fill=tk.X, pady=5)
-        
-        margins_label = ttk.Label(margins_frame, text="剪裁边距", font=("微软雅黑", 11, "bold"), foreground=self.primary_color, style="Card.TLabel")
-        margins_label.grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=5)
-        
-        # 左边距
-        left_frame = ttk.Frame(margins_frame, style="Card.TFrame")
-        left_frame.grid(row=1, column=0, padx=(20, 15), pady=10, sticky=tk.W)
-        
-        ttk.Label(left_frame, text="左边距:", style="Card.TLabel").pack(side=tk.LEFT)
-        self.left_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'left_margin')))
-        self.left_margin_spin = ttk.Spinbox(left_frame, from_=0, to=50, width=5, 
-                                          textvariable=self.left_margin_var,
-                                          command=self.save_margins)
-        self.left_margin_spin.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 右边距
-        right_frame = ttk.Frame(margins_frame, style="Card.TFrame")
-        right_frame.grid(row=1, column=1, padx=15, pady=10, sticky=tk.W)
-        
-        ttk.Label(right_frame, text="右边距:", style="Card.TLabel").pack(side=tk.LEFT)
-        self.right_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'right_margin')))
-        self.right_margin_spin = ttk.Spinbox(right_frame, from_=0, to=50, width=5, 
-                                           textvariable=self.right_margin_var,
-                                           command=self.save_margins)
-        self.right_margin_spin.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 上边距
-        top_frame = ttk.Frame(margins_frame, style="Card.TFrame")
-        top_frame.grid(row=2, column=0, padx=(20, 15), pady=10, sticky=tk.W)
-        
-        ttk.Label(top_frame, text="上边距:", style="Card.TLabel").pack(side=tk.LEFT)
-        self.top_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'top_margin')))
-        self.top_margin_spin = ttk.Spinbox(top_frame, from_=0, to=50, width=5, 
-                                         textvariable=self.top_margin_var,
-                                         command=self.save_margins)
-        self.top_margin_spin.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 下边距
-        bottom_frame = ttk.Frame(margins_frame, style="Card.TFrame")
-        bottom_frame.grid(row=2, column=1, padx=15, pady=10, sticky=tk.W)
-        
-        ttk.Label(bottom_frame, text="下边距:", style="Card.TLabel").pack(side=tk.LEFT)
-        self.bottom_margin_var = tk.IntVar(value=int(self.config.get('Settings', 'bottom_margin')))
-        self.bottom_margin_spin = ttk.Spinbox(bottom_frame, from_=0, to=50, width=5, 
-                                            textvariable=self.bottom_margin_var,
-                                            command=self.save_margins)
-        self.bottom_margin_spin.pack(side=tk.LEFT, padx=(5, 0))
-    
-    def toggle_output_path(self):
-        """根据覆盖选项切换输出路径按钮状态"""
-        if self.overwrite_var.get():
-            self.output_button.config(state=tk.DISABLED)
-            self.output_entry.config(state=tk.DISABLED)
+            widget.dnd_bind('<<DropEnter>>', self.on_drop_enter)
+            widget.dnd_bind('<<DropLeave>>', self.on_drop_leave)
+
+    def bind_window_drag(self, widgets):
+        for widget in widgets:
+            widget.bind("<ButtonPress-1>", self.start_window_drag)
+            widget.bind("<B1-Motion>", self.on_window_drag)
+            widget.bind("<ButtonRelease-1>", self.stop_window_drag)
+
+    def start_window_drag(self, event):
+        self._drag_offset_x = event.x_root - self.root.winfo_x()
+        self._drag_offset_y = event.y_root - self.root.winfo_y()
+
+    def on_window_drag(self, event):
+        if not hasattr(self, "_drag_offset_x"):
+            return
+
+        x = event.x_root - self._drag_offset_x
+        y = event.y_root - self._drag_offset_y
+        self.root.geometry(f"+{x}+{y}")
+
+    def stop_window_drag(self, event):
+        self._drag_offset_x = None
+        self._drag_offset_y = None
+
+    def set_output_mode(self, overwrite_original):
+        self.overwrite_var.set(overwrite_original)
+        self.toggle_output_path()
+
+    def update_chip_button(self, button, selected):
+        if selected:
+            button.config(
+                bg=self.primary_color,
+                fg=self.button_text_color,
+                activebackground=self.primary_hover_color,
+                activeforeground=self.button_text_color,
+                highlightbackground=self.primary_color,
+                highlightcolor=self.primary_hover_color,
+            )
         else:
-            self.output_button.config(state=tk.NORMAL)
-            self.output_entry.config(state=tk.NORMAL)
-        
-        # 更新配置
-        self.config['Settings']['overwrite_original'] = str(self.overwrite_var.get())
+            button.config(
+                bg=self.card_bg_color,
+                fg=self.text_color,
+                activebackground=self.muted_bg_color,
+                activeforeground=self.text_color,
+                highlightbackground=self.border_color,
+                highlightcolor=self.border_color,
+            )
+
+    def update_topmost_button(self):
+        enabled = self.topmost_var.get()
+        self.update_chip_button(self.topmost_button, enabled)
+        self.topmost_button.config(text=f"置顶 {'开' if enabled else '关'}")
+
+    def get_margin_values(self):
+        return [
+            self.left_margin_var.get(),
+            self.right_margin_var.get(),
+            self.top_margin_var.get(),
+            self.bottom_margin_var.get(),
+        ]
+
+    def get_uniform_margin_display_value(self):
+        margins = self.get_margin_values()
+        return str(margins[0]) if len(set(margins)) == 1 else ""
+
+    def toggle_topmost(self):
+        enabled = not self.topmost_var.get()
+        self.topmost_var.set(enabled)
+        self.root.attributes("-topmost", enabled)
+        self.config['Settings']['always_on_top'] = str(enabled)
         self.save_config()
-    
-    def save_margins(self):
+        self.update_topmost_button()
+
+    def update_advanced_button(self):
+        margins = self.get_margin_values() if hasattr(self, 'left_margin_var') else [0, 0, 0, 0]
+        if all(margin == 0 for margin in margins):
+            self.margin_summary_var.set("0 表示贴边裁剪，不额外保留空白。")
+        elif len(set(margins)) == 1:
+            self.margin_summary_var.set(f"当前四边统一留白 {margins[0]}px。")
+        else:
+            self.margin_summary_var.set(
+                f"当前分别设置: 左{margins[0]} 右{margins[1]} 上{margins[2]} 下{margins[3]} px"
+            )
+
+        if hasattr(self, 'uniform_margin_var'):
+            self.uniform_margin_var.set(self.get_uniform_margin_display_value())
+
+        button_text = f"分别设置 {'▲' if self.advanced_visible else '▼'}"
+        self.update_chip_button(self.margin_details_button, self.advanced_visible)
+        self.margin_details_button.config(text=button_text)
+
+    def toggle_advanced_options(self):
+        self.advanced_visible = not self.advanced_visible
+        if self.advanced_visible:
+            self.advanced_panel.pack(fill=tk.X, pady=(10, 0))
+        else:
+            self.advanced_panel.pack_forget()
+        self.update_advanced_button()
+        self.root.after_idle(self.delayed_layout_update)
+        if self.advanced_visible:
+            self.root.after_idle(lambda: self.scroll_canvas.yview_moveto(1.0))
+
+    def apply_uniform_margin(self, event=None):
+        raw_value = self.uniform_margin_var.get().strip()
+        if raw_value == "":
+            return
+
+        try:
+            margin_value = int(raw_value)
+        except ValueError:
+            self.uniform_margin_var.set(self.get_uniform_margin_display_value())
+            return
+
+        margin_value = max(0, min(50, margin_value))
+        self.left_margin_var.set(margin_value)
+        self.right_margin_var.set(margin_value)
+        self.top_margin_var.set(margin_value)
+        self.bottom_margin_var.set(margin_value)
+        self.save_margins()
+
+    def toggle_output_path(self):
+        """根据覆盖选项切换输出路径控件"""
+        overwrite_original = self.overwrite_var.get()
+        self.config['Settings']['overwrite_original'] = str(overwrite_original)
+        self.save_config()
+
+        self.update_chip_button(self.overwrite_button, overwrite_original)
+        self.update_chip_button(self.output_dir_button, not overwrite_original)
+        self.output_entry.config(state=tk.DISABLED if overwrite_original else tk.NORMAL)
+        self.output_browse_button.config(state=tk.DISABLED if overwrite_original else tk.NORMAL)
+
+        self.update_output_path_buttons()
+        self.root.after_idle(self.delayed_layout_update)
+
+    def update_output_path_buttons(self):
+        output_dir = self.output_path_var.get().strip()
+        has_directory = bool(output_dir) and os.path.isdir(output_dir)
+        overwrite_original = self.overwrite_var.get()
+        self.output_open_button.config(state=tk.NORMAL if has_directory and not overwrite_original else tk.DISABLED)
+
+        if overwrite_original:
+            self.output_mode_hint_var.set("当前会直接覆盖原文件，无需设置输出目录。")
+        elif output_dir:
+            self.output_mode_hint_var.set("当前会保存到上面的输出目录。")
+        else:
+            self.output_mode_hint_var.set("点击“浏览”选择一个输出目录。")
+
+    def persist_output_path(self, event=None):
+        output_dir = self.output_path_var.get().strip()
+        self.output_path_var.set(output_dir)
+        self.config['Settings']['output_dir'] = output_dir
+        self.save_config()
+        self.update_output_path_buttons()
+
+    def save_margins(self, event=None):
         """保存边距设置"""
         self.config['Settings']['left_margin'] = str(self.left_margin_var.get())
         self.config['Settings']['right_margin'] = str(self.right_margin_var.get())
         self.config['Settings']['top_margin'] = str(self.top_margin_var.get())
         self.config['Settings']['bottom_margin'] = str(self.bottom_margin_var.get())
         self.save_config()
-    
+        self.update_advanced_button()
+
+    def select_files(self):
+        file_types = [
+            ("支持的文件", "*.pdf *.jpg *.jpeg *.png *.bmp *.tiff *.tif *.gif"),
+            ("PDF 文件", "*.pdf"),
+            ("图片文件", "*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.gif"),
+            ("所有文件", "*.*"),
+        ]
+        files = filedialog.askopenfilenames(title="选择要处理的文件", filetypes=file_types)
+        if files:
+            self.process_dropped_files(list(files))
+
     def select_output_dir(self):
         """选择输出目录"""
-        output_dir = filedialog.askdirectory()
+        initial_dir = self.output_path_var.get().strip() or os.path.expanduser("~")
+        output_dir = filedialog.askdirectory(initialdir=initial_dir)
         if output_dir:
             self.output_path_var.set(output_dir)
-            self.config['Settings']['output_dir'] = output_dir
-            self.save_config()
+            self.persist_output_path()
+
+    def open_output_dir(self):
+        output_dir = self.output_path_var.get().strip()
+        if not output_dir:
+            messagebox.showwarning("提示", "请先设置输出文件夹")
+            return
+
+        if not os.path.isdir(output_dir):
+            messagebox.showwarning("提示", "输出文件夹不存在")
+            return
+
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(output_dir)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", output_dir])
+            else:
+                subprocess.Popen(["xdg-open", output_dir])
+        except Exception as exc:
+            messagebox.showerror("错误", f"无法打开输出文件夹:\n{exc}")
+
+    def set_drop_area_state(self, state):
+        palette = {
+            "idle": (self.drop_border_color, self.primary_soft_color, self.primary_color, "DROP"),
+            "drag": (self.primary_color, self.primary_soft_color, self.primary_color, "READY"),
+            "processing": (self.primary_color, self.primary_soft_color, self.primary_color, "WORK"),
+            "success": (self.success_color, self.success_soft_color, self.success_color, "DONE"),
+            "warning": (self.warning_color, self.warning_soft_color, self.warning_color, "WARN"),
+        }
+        border_color, badge_bg, badge_fg, badge_text = palette[state]
+        self.drop_card.config(highlightbackground=border_color, highlightcolor=border_color)
+        self.drop_badge.config(bg=badge_bg, fg=badge_fg, text=badge_text)
+
+    def on_drop_enter(self, event):
+        if not self.is_processing:
+            self.set_drop_area_state("drag")
+        return event.action
+
+    def on_drop_leave(self, event):
+        if not self.is_processing:
+            self.set_drop_area_state("idle")
 
     def get_processing_settings(self):
         """Capture UI-controlled settings before starting a worker thread."""
+        output_dir = self.output_path_var.get().strip()
+        self.config['Settings']['output_dir'] = output_dir
+        self.save_config()
         return {
             'overwrite_original': self.overwrite_var.get(),
-            'output_dir': self.config.get('Settings', 'output_dir').strip(),
+            'output_dir': output_dir,
             'margins': {
                 'left': self.left_margin_var.get(),
                 'right': self.right_margin_var.get(),
@@ -403,21 +880,26 @@ class PDFCropperApp:
         reserved_paths.add(candidate_key)
         return candidate
 
-    def finish_processing(self, total_success, total_failed):
-        final_icon = "✅" if total_failed == 0 else "⚠️"
-        self.drop_icon_label.config(text=final_icon)
+    def finish_processing(self, total_success, total_failed, failed_messages):
+        self.is_processing = False
 
         if total_failed > 0:
             self.status_var.set(f"处理完成: {total_success} 成功, {total_failed} 失败")
-            messagebox.showinfo("完成", f"处理完成\n成功: {total_success} 个文件\n失败: {total_failed} 个文件")
+            self.status_label.config(fg=self.warning_color)
+            self.set_drop_area_state("warning")
+            summary = "\n".join(failed_messages[:6])
+            if len(failed_messages) > 6:
+                summary += f"\n... 另有 {len(failed_messages) - 6} 个文件失败"
+            messagebox.showwarning("处理完成", f"成功: {total_success} 个文件\n失败: {total_failed} 个文件\n\n{summary}")
         else:
-            self.status_var.set(f"成功处理 {total_success} 个文件")
-            messagebox.showinfo("完成", f"成功处理 {total_success} 个文件")
-
-        self.root.after(1000, lambda: self.drop_icon_label.config(text="📄"))
+            self.status_var.set(f"已完成 {total_success} 个文件")
+            self.status_label.config(fg=self.success_color)
+            self.set_drop_area_state("success")
     
     def drop(self, event):
         """处理文件拖放事件"""
+        if not self.is_processing:
+            self.set_drop_area_state("idle")
         files = self.parse_drop_data(event.data)
         self.process_dropped_files(files)
     
@@ -435,7 +917,14 @@ class PDFCropperApp:
     
     def process_dropped_files(self, files):
         """处理拖放的文件"""
+        if self.is_processing:
+            messagebox.showinfo("请稍候", "当前还有文件在处理中")
+            return
+
         if not files:
+            self.status_var.set("没有检测到支持的文件")
+            self.status_label.config(fg=self.warning_color)
+            self.set_drop_area_state("warning")
             messagebox.showinfo("提示", "没有检测到支持的文件格式")
             return
 
@@ -443,6 +932,9 @@ class PDFCropperApp:
 
         # 检查输出路径
         if not settings['overwrite_original'] and not settings['output_dir']:
+            self.status_var.set("请先设置输出文件夹")
+            self.status_label.config(fg=self.warning_color)
+            self.set_drop_area_state("warning")
             messagebox.showwarning("警告", "请先选择输出文件夹")
             return
 
@@ -450,15 +942,22 @@ class PDFCropperApp:
             try:
                 os.makedirs(settings['output_dir'], exist_ok=True)
             except OSError as exc:
+                self.status_var.set("输出文件夹不可用")
+                self.status_label.config(fg=self.warning_color)
+                self.set_drop_area_state("warning")
                 messagebox.showerror("错误", f"无法创建输出文件夹:\n{exc}")
                 return
 
+        self.update_output_path_buttons()
+        self.is_processing = True
+        self.last_output_dir = settings['output_dir'] if not settings['overwrite_original'] else ""
         self.progress_var.set(0)
         self.progress.config(maximum=len(files))
 
         # 更新UI反馈
-        self.drop_icon_label.config(text="⏳")
-        self.status_var.set("开始处理...")
+        self.status_label.config(fg=self.secondary_text)
+        self.set_drop_area_state("processing")
+        self.status_var.set(f"开始处理 {len(files)} 个文件...")
 
         # 开始处理线程
         threading.Thread(target=self.process_files_thread, args=(files, settings), daemon=True).start()
@@ -468,11 +967,12 @@ class PDFCropperApp:
         total_success = 0
         total_failed = 0
         reserved_output_paths = set()
+        failed_messages = []
 
         for i, file_path in enumerate(files):
             try:
                 filename = os.path.basename(file_path)
-                self.enqueue_ui_call(self.status_var.set, f"正在处理: {filename}")
+                self.enqueue_ui_call(self.status_var.set, f"正在处理 {i + 1}/{len(files)} · {filename}")
 
                 # 确定输出路径
                 output_path = self.build_output_path(file_path, settings, reserved_output_paths)
@@ -490,13 +990,9 @@ class PDFCropperApp:
 
             except Exception as e:
                 total_failed += 1
-                self.enqueue_ui_call(
-                    messagebox.showerror,
-                    "错误",
-                    f"处理文件 {os.path.basename(file_path)} 时出错:\n{str(e)}",
-                )
+                failed_messages.append(f"{os.path.basename(file_path)}: {str(e)}")
 
-        self.enqueue_ui_call(self.finish_processing, total_success, total_failed)
+        self.enqueue_ui_call(self.finish_processing, total_success, total_failed, failed_messages)
 
     def crop_image(self, input_path, output_path, margins):
         """剪裁图片白边"""
@@ -768,34 +1264,80 @@ class PDFCropperApp:
     
     
     def on_frame_configure(self, event):
-        """当框架大小改变时，更新滚动区域"""
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        
-        # 当框架配置变化时，检查并更新滚动条状态
-        if self.main_frame.winfo_reqheight() > self.canvas.winfo_height():
-            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)  # 显示滚动条
-        else:
-            self.scrollbar.pack_forget()  # 隐藏滚动条
+        """合并内容区布局更新，避免缩放时频繁重排。"""
+        self.request_scroll_layout_update()
         
     def on_canvas_configure(self, event):
-        """当画布大小改变时，调整内部窗口大小"""
-        width = event.width
-        self.canvas.itemconfig(self.canvas_window, width=width)
-        
-        # 当画布大小改变时，检查并更新滚动条状态
-        if self.main_frame.winfo_reqheight() > event.height:
-            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)  # 显示滚动条
-        else:
-            self.scrollbar.pack_forget()  # 隐藏滚动条
+        """合并画布宽度更新，避免缩放时卡顿。"""
+        self.request_scroll_layout_update(event.width)
     
     def delayed_layout_update(self):
-        """设置定时器更新界面布局，确保滚动区域计算准确"""
-        self.on_frame_configure(None)
-        # 只执行一次，不再继续调用
+        """手动刷新滚动区域。"""
+        self.request_scroll_layout_update()
+
+    def request_scroll_layout_update(self, width=None):
+        if not hasattr(self, 'scroll_canvas'):
+            return
+
+        if width is not None:
+            self._pending_canvas_width = width
+
+        if self._layout_update_job is None:
+            self._layout_update_job = self.root.after_idle(self.apply_scroll_layout_update)
+
+    def apply_scroll_layout_update(self):
+        self._layout_update_job = None
+
+        if not hasattr(self, 'scroll_canvas'):
+            return
+
+        target_width = self._pending_canvas_width
+        if target_width is not None and target_width != self._last_canvas_width:
+            self.scroll_canvas.itemconfigure(self.canvas_window, width=target_width)
+            self._last_canvas_width = target_width
+        self._pending_canvas_width = None
+
+        self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
+        self.update_scrollbar_visibility()
+
+    def update_scrollbar_visibility(self):
+        if not hasattr(self, 'scroll_canvas'):
+            return
+
+        content_height = self.content_frame.winfo_reqheight()
+        canvas_height = self.scroll_canvas.winfo_height()
+        should_reset = content_height <= canvas_height + 4
+
+        if should_reset:
+            self.scroll_canvas.yview_moveto(0)
+
+    def on_mousewheel(self, event):
+        if not hasattr(self, 'scroll_canvas'):
+            return
+
+        content_height = self.content_frame.winfo_reqheight()
+        canvas_height = self.scroll_canvas.winfo_height()
+        if content_height <= canvas_height + 4:
+            return
+
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            delta = -1 * int(event.delta / 120) if event.delta else 0
+
+        if delta:
+            self.scroll_canvas.yview_scroll(delta, "units")
 
 def main():
     # 创建TkinterDnD应用
+    enable_high_dpi()
     root = TkinterDnD.Tk()
+    try:
+        root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / 72.0)
+    except tk.TclError:
+        pass
     app = PDFCropperApp(root)
     root.mainloop()
 

@@ -2,5 +2,5 @@ numpy
 Pillow
 PyMuPDF
 pyinstaller
-setuptools
+setuptools<81
 tkinterdnd2
