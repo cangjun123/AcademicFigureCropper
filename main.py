@@ -6,6 +6,7 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 import fitz  # PyMuPDF
 import threading
 import configparser
+import queue
 import numpy as np  # 添加numpy库
 from PIL import Image  # 添加PIL库用于处理图片
 
@@ -50,6 +51,7 @@ class PDFCropperApp:
         
         # 支持的图片格式
         self.supported_img_formats = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif')
+        self.save_debug_images = False
         
         # 配置样式
         self.style = ttk.Style()
@@ -105,6 +107,7 @@ class PDFCropperApp:
         # 进度变量
         self.progress_var = tk.DoubleVar()
         self.progress_var.set(0)
+        self.ui_queue = queue.Queue()
         
         # 创建UI元素
         self.create_widgets()
@@ -118,6 +121,7 @@ class PDFCropperApp:
         
         # 设置定时器更新界面布局，确保滚动区域计算准确
         self.root.after(100, self.delayed_layout_update)
+        self.root.after(50, self.process_ui_queue)
         
     def load_config(self):
         """加载配置文件"""
@@ -352,6 +356,65 @@ class PDFCropperApp:
             self.output_path_var.set(output_dir)
             self.config['Settings']['output_dir'] = output_dir
             self.save_config()
+
+    def get_processing_settings(self):
+        """Capture UI-controlled settings before starting a worker thread."""
+        return {
+            'overwrite_original': self.overwrite_var.get(),
+            'output_dir': self.config.get('Settings', 'output_dir').strip(),
+            'margins': {
+                'left': self.left_margin_var.get(),
+                'right': self.right_margin_var.get(),
+                'top': self.top_margin_var.get(),
+                'bottom': self.bottom_margin_var.get(),
+            },
+            'save_debug_images': self.save_debug_images,
+        }
+
+    def enqueue_ui_call(self, callback, *args, **kwargs):
+        self.ui_queue.put((callback, args, kwargs))
+
+    def process_ui_queue(self):
+        try:
+            while True:
+                callback, args, kwargs = self.ui_queue.get_nowait()
+                callback(*args, **kwargs)
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(50, self.process_ui_queue)
+
+    def build_output_path(self, file_path, settings, reserved_paths):
+        if settings['overwrite_original']:
+            return file_path
+
+        output_dir = settings['output_dir']
+        output_name = os.path.basename(file_path)
+        base_name, ext = os.path.splitext(output_name)
+        candidate = os.path.join(output_dir, f"{base_name}_cropped{ext}")
+        candidate_key = os.path.normcase(os.path.abspath(candidate))
+        suffix = 2
+
+        while candidate_key in reserved_paths or os.path.exists(candidate):
+            candidate = os.path.join(output_dir, f"{base_name}_cropped_{suffix}{ext}")
+            candidate_key = os.path.normcase(os.path.abspath(candidate))
+            suffix += 1
+
+        reserved_paths.add(candidate_key)
+        return candidate
+
+    def finish_processing(self, total_success, total_failed):
+        final_icon = "✅" if total_failed == 0 else "⚠️"
+        self.drop_icon_label.config(text=final_icon)
+
+        if total_failed > 0:
+            self.status_var.set(f"处理完成: {total_success} 成功, {total_failed} 失败")
+            messagebox.showinfo("完成", f"处理完成\n成功: {total_success} 个文件\n失败: {total_failed} 个文件")
+        else:
+            self.status_var.set(f"成功处理 {total_success} 个文件")
+            messagebox.showinfo("完成", f"成功处理 {total_success} 个文件")
+
+        self.root.after(1000, lambda: self.drop_icon_label.config(text="📄"))
     
     def drop(self, event):
         """处理文件拖放事件"""
@@ -361,7 +424,7 @@ class PDFCropperApp:
     def parse_drop_data(self, data):
         """解析拖放的文件路径数据"""
         files = []
-        for item in data.split():
+        for item in self.root.tk.splitlist(data):
             # 处理可能的引号和花括号（Windows路径特性）
             item = item.strip('{}')
             # 检查文件扩展名
@@ -375,75 +438,67 @@ class PDFCropperApp:
         if not files:
             messagebox.showinfo("提示", "没有检测到支持的文件格式")
             return
-        
+
+        settings = self.get_processing_settings()
+
         # 检查输出路径
-        if not self.overwrite_var.get() and not self.config.get('Settings', 'output_dir'):
+        if not settings['overwrite_original'] and not settings['output_dir']:
             messagebox.showwarning("警告", "请先选择输出文件夹")
             return
-        
-        # 保存文件列表供处理
-        self.processing_files = files
+
+        if not settings['overwrite_original']:
+            try:
+                os.makedirs(settings['output_dir'], exist_ok=True)
+            except OSError as exc:
+                messagebox.showerror("错误", f"无法创建输出文件夹:\n{exc}")
+                return
+
         self.progress_var.set(0)
         self.progress.config(maximum=len(files))
-        
+
         # 更新UI反馈
         self.drop_icon_label.config(text="⏳")
-        
-        # 开始处理线程
-        threading.Thread(target=self.process_files_thread, daemon=True).start()
-    
-    def process_files_thread(self):
-        """在单独的线程中处理文件"""
         self.status_var.set("开始处理...")
-        
+
+        # 开始处理线程
+        threading.Thread(target=self.process_files_thread, args=(files, settings), daemon=True).start()
+
+    def process_files_thread(self, files, settings):
+        """在单独的线程中处理文件"""
         total_success = 0
         total_failed = 0
-        
-        for i, file_path in enumerate(self.processing_files):
+        reserved_output_paths = set()
+
+        for i, file_path in enumerate(files):
             try:
                 filename = os.path.basename(file_path)
-                self.status_var.set(f"正在处理: {filename}")
-                
+                self.enqueue_ui_call(self.status_var.set, f"正在处理: {filename}")
+
                 # 确定输出路径
-                if self.overwrite_var.get():
-                    output_path = file_path
-                else:
-                    output_dir = self.config.get('Settings', 'output_dir')
-                    output_name = os.path.basename(file_path)
-                    base_name, ext = os.path.splitext(output_name)
-                    output_path = os.path.join(output_dir, f"{base_name}_cropped{ext}")
-                
+                output_path = self.build_output_path(file_path, settings, reserved_output_paths)
+
                 # 根据文件类型选择处理方法
                 _, ext = os.path.splitext(file_path.lower())
                 if ext == '.pdf':
-                    self.crop_pdf(file_path, output_path)
+                    self.crop_pdf(file_path, output_path, settings)
                 elif ext in self.supported_img_formats:
-                    self.crop_image(file_path, output_path)
-                
+                    self.crop_image(file_path, output_path, settings['margins'])
+
                 # 更新进度
-                self.progress_var.set(i+1)
-                self.root.update_idletasks()
+                self.enqueue_ui_call(self.progress_var.set, i + 1)
                 total_success += 1
-                
+
             except Exception as e:
                 total_failed += 1
-                messagebox.showerror("错误", f"处理文件 {os.path.basename(file_path)} 时出错:\n{str(e)}")
-        
-        # 处理完成后更新UI
-        self.drop_icon_label.config(text="✅" if total_failed == 0 else "⚠️")
-        
-        # 显示结果
-        if total_failed > 0:
-            self.status_var.set(f"处理完成: {total_success} 成功, {total_failed} 失败")
-            messagebox.showinfo("完成", f"处理完成\n成功: {total_success} 个文件\n失败: {total_failed} 个文件")
-        else:
-            self.status_var.set(f"成功处理 {total_success} 个文件")
-            messagebox.showinfo("完成", f"成功处理 {total_success} 个文件")
-        
-        # 1秒后恢复原始图标
-        self.root.after(1000, lambda: self.drop_icon_label.config(text="📄"))
+                self.enqueue_ui_call(
+                    messagebox.showerror,
+                    "错误",
+                    f"处理文件 {os.path.basename(file_path)} 时出错:\n{str(e)}",
+                )
 
-    def crop_image(self, input_path, output_path):
+        self.enqueue_ui_call(self.finish_processing, total_success, total_failed)
+
+    def crop_image(self, input_path, output_path, margins):
         """剪裁图片白边"""
         # 打开图片
         img = Image.open(input_path)
@@ -475,10 +530,10 @@ class PDFCropperApp:
                 min_content_size = 10
                 if (max_x - min_x) > min_content_size and (max_y - min_y) > min_content_size:
                     # 获取边距设置
-                    left_margin = self.left_margin_var.get()
-                    top_margin = self.top_margin_var.get()
-                    right_margin = self.right_margin_var.get()
-                    bottom_margin = self.bottom_margin_var.get()
+                    left_margin = margins['left']
+                    top_margin = margins['top']
+                    right_margin = margins['right']
+                    bottom_margin = margins['bottom']
                     
                     # 计算裁剪区域（添加边距）
                     x1 = max(min_x - left_margin, 0)
@@ -541,7 +596,7 @@ class PDFCropperApp:
         # 默认返回PNG格式
         return 'PNG'
     
-    def crop_pdf(self, input_path, output_path):
+    def crop_pdf(self, input_path, output_path, settings):
         """剪裁PDF文件白边"""
         # 打开PDF文件
         doc = fitz.open(input_path)
@@ -550,15 +605,17 @@ class PDFCropperApp:
         new_doc = fitz.open()
         
         # 获取边距设置
-        left_margin = self.left_margin_var.get()
-        top_margin = self.top_margin_var.get()
-        right_margin = self.right_margin_var.get()
-        bottom_margin = self.bottom_margin_var.get()
-        
+        margins = settings['margins']
+        left_margin = margins['left']
+        top_margin = margins['top']
+        right_margin = margins['right']
+        bottom_margin = margins['bottom']
+
         # 创建调试输出目录
-        debug_dir = os.path.join(os.path.dirname(output_path), "debug_output")
-        if not os.path.exists(debug_dir):
-            os.makedirs(debug_dir)
+        debug_dir = None
+        if settings.get('save_debug_images'):
+            debug_dir = os.path.join(os.path.dirname(output_path), "debug_output")
+            os.makedirs(debug_dir, exist_ok=True)
         
         # 处理每一页
         for page_num in range(len(doc)):
@@ -571,7 +628,7 @@ class PDFCropperApp:
                 # 使用pixmap分析页面内容
                 try:
                     # 提高分辨率以获取更精确的边界
-                    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))  # 增加到10倍采样
+                    pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)  # 增加到10倍采样
                     img_data = pix.samples
                     width, height = pix.width, pix.height
                     
@@ -581,8 +638,9 @@ class PDFCropperApp:
                     np_img = np.frombuffer(img_data, dtype=np.uint8).reshape(height, width, channels)
                     
                     # 保存原始图像用于调试
-                    debug_img_path = os.path.join(debug_dir, f"page_{page_num+1}_original.png")
-                    Image.fromarray(np_img).save(debug_img_path)
+                    if debug_dir:
+                        debug_img_path = os.path.join(debug_dir, f"page_{page_num+1}_original.png")
+                        Image.fromarray(np_img).save(debug_img_path)
                     
                     # 计算亮度 - 对于RGB图像取平均值，对于灰度图像直接使用值
                     if channels >= 3:
@@ -593,16 +651,18 @@ class PDFCropperApp:
                         brightness = np_img[:, :, 0]
                     
                     # 保存亮度图用于调试
-                    debug_brightness_path = os.path.join(debug_dir, f"page_{page_num+1}_brightness.png")
-                    Image.fromarray(brightness.astype(np.uint8)).save(debug_brightness_path)
+                    if debug_dir:
+                        debug_brightness_path = os.path.join(debug_dir, f"page_{page_num+1}_brightness.png")
+                        Image.fromarray(brightness.astype(np.uint8)).save(debug_brightness_path)
                     
                     # 根据阈值创建掩码
                     threshold = 245  # 阈值
                     mask = brightness < threshold
                     
                     # 保存掩码图用于调试
-                    debug_mask_path = os.path.join(debug_dir, f"page_{page_num+1}_mask.png")
-                    Image.fromarray((mask * 255).astype(np.uint8)).save(debug_mask_path)
+                    if debug_dir:
+                        debug_mask_path = os.path.join(debug_dir, f"page_{page_num+1}_mask.png")
+                        Image.fromarray((mask * 255).astype(np.uint8)).save(debug_mask_path)
                     
                     # 根据掩码找到内容区域边界
                     if np.any(mask):  # 如果有任何内容
@@ -644,14 +704,15 @@ class PDFCropperApp:
                         content_rect = fitz.Rect(min_x, min_y, max_x, max_y)
                         
                         # 创建可视化图像，在原始图像上绘制检测到的内容区域
-                        debug_visual_path = os.path.join(debug_dir, f"page_{page_num+1}_content_rect.png")
-                        visual_img = np_img.copy()
-                        # 绘制矩形边界
-                        visual_img[top_bound:bottom_bound+1, left_bound:left_bound+5] = [255, 0, 0]  # 左边界
-                        visual_img[top_bound:bottom_bound+1, right_bound-4:right_bound+1] = [255, 0, 0]  # 右边界
-                        visual_img[top_bound:top_bound+5, left_bound:right_bound+1] = [255, 0, 0]  # 上边界
-                        visual_img[bottom_bound-4:bottom_bound+1, left_bound:right_bound+1] = [255, 0, 0]  # 下边界
-                        Image.fromarray(visual_img).save(debug_visual_path)
+                        if debug_dir and channels >= 3:
+                            debug_visual_path = os.path.join(debug_dir, f"page_{page_num+1}_content_rect.png")
+                            visual_img = np_img.copy()
+                            # 绘制矩形边界
+                            visual_img[top_bound:bottom_bound+1, left_bound:left_bound+5] = [255, 0, 0]  # 左边界
+                            visual_img[top_bound:bottom_bound+1, right_bound-4:right_bound+1] = [255, 0, 0]  # 右边界
+                            visual_img[top_bound:top_bound+5, left_bound:right_bound+1] = [255, 0, 0]  # 上边界
+                            visual_img[bottom_bound-4:bottom_bound+1, left_bound:right_bound+1] = [255, 0, 0]  # 下边界
+                            Image.fromarray(visual_img).save(debug_visual_path)
                     else:
                         content_rect = rect  # 未发现内容，使用整个页面
                 except Exception as e:

@@ -1,3 +1,6 @@
-tkinterdnd2
-PyMuPDF
 numpy
+Pillow
+PyMuPDF
+pyinstaller
+setuptools
+tkinterdnd2
